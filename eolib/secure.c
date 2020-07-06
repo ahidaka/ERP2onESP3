@@ -30,6 +30,12 @@ void InitSecureRegister(void)
 	for(i = 0; i < SECURE_REGISTER_SIZE; i++) {
 		SecureRegisterTable[i].Id = 0UL;
 		SecureRegisterTable[i].Status = NO_ENTRY;
+		SecureRegisterTable[i].RlcLength = 0;
+		SecureRegisterTable[i].Sec = NULL;
+		SecureRegisterTable[i].Rlc[0]= 0;
+		SecureRegisterTable[i].Rlc[1]= 0;
+		SecureRegisterTable[i].Rlc[2]= 0;
+		SecureRegisterTable[i].Rlc[3]= 0;
 	}
 }
 
@@ -75,7 +81,6 @@ SECURE_REGISTER *ClearSecureRegister(UINT Id)
 // Publickey
 //
 PUBLICKEY *PublickeyTable;
-//static FILE *PublickeyFile;
 
 typedef enum {
 	Error = 0, Start = 1, GotId = 2, GotRlc = 3, GotKey = 4
@@ -169,6 +174,7 @@ static SCAN_STATUS ScanLine(CHAR *Buffer, PUBLICKEY *pt)
 			case GotId:
 				ToHexDecimal(target, pt->Rlc);
 				status = GotRlc;
+				pt->RlcLength = strlen(target) / 2;
 				i = 0;
 				break;
 			case GotRlc:
@@ -301,7 +307,7 @@ VOID ReloadPublickey(char *PublickeyPath)
 			}
 			nt = GetTableId(pt->Id);
 			if (nt != NULL) {
-				sec = SecCreate(pt->Rlc, pt->Key);
+				sec = SecCreate(pt->Rlc, pt->Key, pt->RlcLength);
 				if (sec != NULL) {
 #ifdef SECURE_DEBUG
 					CHAR str[12];
@@ -330,13 +336,13 @@ static VOID WriteLine(FILE *f, PUBLICKEY *pt)
 {
 	int i;
 	const int length = 8 + 1 + 8 + 1 + 32 + 4;  
-	CHAR buffer[BUFSIZ / 8];
+	CHAR buffer[256];
 	CHAR *p = &buffer[0];
 	
 	DEBUG_LOG("Enter");
 #ifdef SECURE_DEBUG
-	printf("ID:%08X RLC=%02X %02X %02X %02X KEY=%02X %02X %02X %02X\n",
-	       pt->Id, pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3],
+	printf("ID:%08X RLC(%d)=%02X %02X %02X %02X KEY=%02X %02X %02X %02X\n",
+	       pt->Id, pt->RlcLength, pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3],
 	       pt->Key[0], pt->Key[1], pt->Key[2], pt->Key[3]);
 #endif
 	//Write ID
@@ -345,8 +351,10 @@ static VOID WriteLine(FILE *f, PUBLICKEY *pt)
 	buffer[9] = '\0';
 	
 	//Write RLC
-	sprintf(&buffer[9], "%02X%02X%02X%02X,",
-		pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3]);
+	for(i = 0; i < pt->RlcLength; i++) {
+		sprintf(&buffer[9 + (i * 2)], "%02X", pt->Rlc[i]);
+	}
+	strcat(&buffer[9], ",");
 
 	//Write KEY
 	p = &buffer[18];
@@ -368,6 +376,12 @@ VOID RewritePublickey(EO_CONTROL *p)
 	FILE *f;
 	INT i;
 
+	printf("++%s,%s,%s\n", p->BridgeDirectory, p->PublickeyFile, p->PublickeyPath);
+
+	if (p->PublickeyPath == NULL) {
+		p->PublickeyPath = MakePath(p->BridgeDirectory, p->PublickeyFile); 
+	}
+
 	DEBUG_LOG("Enter");
 	f = fopen(p->PublickeyPath, "w");
 	for(i = 0; i < PUBLICKEY_TABLE_SIZE; i++) {
@@ -381,9 +395,11 @@ VOID RewritePublickey(EO_CONTROL *p)
 		}
 		pt++;
 	}
+	printf("++%s,%s,%s\n", p->BridgeDirectory, p->PublickeyFile, p->PublickeyPath);
+
 }
 
-PUBLICKEY *AddPublickey(EO_CONTROL *p, UINT Id, BYTE *Rlc, BYTE *Key)
+PUBLICKEY *AddPublickey(EO_CONTROL *p, UINT Id, SECURE_REGISTER *ps)
 {
 	INT i;
 	PUBLICKEY *pt = NULL;
@@ -393,8 +409,9 @@ PUBLICKEY *AddPublickey(EO_CONTROL *p, UINT Id, BYTE *Rlc, BYTE *Key)
 
 	DEBUG_LOG("Enter");
 #ifdef SECURE_DEBUG
-	printf("RLC=%02X %02X %02X %02X KEY=%02X %02X %02X %02X\n",
-	       Rlc[0], Rlc[1], Rlc[2], Rlc[3], Key[0], Key[1], Key[2], Key[3]);
+	printf("RLC(%d)=%02X %02X %02X %02X KEY=%02X %02X %02X %02X\n",
+	       ps->RlcLength, ps->Rlc[0], ps->Rlc[1], ps->Rlc[2], ps->Rlc[3],
+		   ps->Key[0], ps->Key[1], ps->Key[2], ps->Key[3]);
 #endif
 	for(i = 0; i < PUBLICKEY_TABLE_SIZE; i++) {
 #ifdef SECURE_DEBUG
@@ -404,21 +421,23 @@ PUBLICKEY *AddPublickey(EO_CONTROL *p, UINT Id, BYTE *Rlc, BYTE *Key)
 		if (pt->Id == Id || pt->Id == 0UL) {
 			pt->Id = Id;
 			pt->Option = 0;
-#if 0			
+			pt->RlcLength = ps->RlcLength;
+#if 0 // SEC_DEVELOP...
 			strcpy(RlcFile, "RLC-");
 			IdToString(Id, &RlcFile[4]);
 			strcat(RlcFile, ".txt");	
 			pt->RlcPath = MakePath(p->BridgeDirectory, RlcFile);
 #endif
-			memcpy(pt->Rlc, Rlc, RLC_SIZE);
-			memcpy(pt->Key, Key, KEY_SIZE);
+			memcpy(pt->Rlc, ps->Rlc, ps->RlcLength);
+			memcpy(pt->Key, ps->Key, KEY_SIZE);
 #ifdef SECURE_DEBUG
-			printf("++%d-0:RLC=%02X%02X%02X%02X %02X%02X%02X%02X\n",
-			       i, Rlc[0], Rlc[1], Rlc[2], Rlc[3],
+			printf("++%d-0:RLC(%d)=%02X%02X%02X%02X %02X%02X%02X%02X\n",
+			       i, ps->RlcLength, ps->Rlc[0], ps->Rlc[1], ps->Rlc[2], ps->Rlc[3],
 			       pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3]);
 #endif
 
-#if SEC_DEVELOP	
+#if SEC_DEVELOP
+			// Currently don't care these lines...
 			strcpy(RlcFile, "RLC-");
 			printf("++%d-1:RLC=%02X %02X %02X %02X\n",
 			       i, pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3]);
@@ -433,11 +452,11 @@ PUBLICKEY *AddPublickey(EO_CONTROL *p, UINT Id, BYTE *Rlc, BYTE *Key)
 			pt->RlcPath = MakePath(p->BridgeDirectory, RlcFile);
 #endif
 #ifdef SECURE_DEBUG
-			printf("++%d-4:RLC=%02X %02X %02X %02X\n",
-			       i, pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3]);
+			printf("++%d-*:RLC(%d)=%02X %02X %02X %02X\n",
+			       i, ps->RlcLength, pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3]);
 #endif
 #if SEC_DEVELOP			
-			WriteRlc(pt);
+			WriteRlc(pt); // RlcLength will be needed...
 #endif
 			RewritePublickey(p);
 			break;
@@ -490,6 +509,34 @@ PUBLICKEY *ClearPublickey(UINT Id)
 }
 #endif
 
+INT RlcLength(INT Slf)
+{
+	INT rlcArgo = (Slf & 0xE0) >> 5;
+	INT length = 0;
+
+	switch(rlcArgo) {
+	case 3:
+		length = 2;
+		break;
+	case 5:
+		length = 3;
+		break;
+	case 6:
+		length = 4;
+		break;
+	case 7:
+		length = 4;
+		break;
+	case 0:
+	case 1:
+	case 2:
+	case 4:
+	default:
+		break;
+	}
+	return length;
+}
+
 //
 //
 //
@@ -497,7 +544,7 @@ PUBLICKEY *ClearPublickey(UINT Id)
 #include "eoif.c"
 #else
 INT SecInit(void){ return 0; }
-SEC_HANDLE SecCreate(BYTE *Rlc, BYTE *Key) { return NULL; }
+SEC_HANDLE SecCreate(BYTE *Rlc, BYTE *Key, INT RlcLength) { return NULL; }
 void SecFree(SEC_HANDLE h) {}
 
 INT SecUpdate(SEC_HANDLE h) {return 0;}

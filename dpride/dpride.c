@@ -28,7 +28,7 @@ static const char copyright[] = "\n(c) 2017 Device Drivers, Ltd. \n";
 static const char version[] = "\n@ dpride Version 1.26 \n";
 
 #define ERP2_DEBUG (1)
-////#define SECURE_DEBUG (1)
+#define SECURE_DEBUG (1)
 //#define FILTER_DEBUG (1)
 //#define CMD_DEBUG (1)
 //#define CT_DEBUG (1)
@@ -1558,15 +1558,15 @@ void NotifyBrokers(long num)
 }
 
 #ifdef SECURE_DEBUG
-static void PrintKey(BYTE *Key, BYTE *Rlc)
+static void PrintKey(SECURE_REGISTER *ps)
 {
 	int i;
 	printf("KEY: ");
 	for(i = 0; i < 16; i++)
-		printf("%02X ", Key[i]);
-	printf("\nRLC: ");
-	for(i = 0; i < 4; i++)
-		printf("%02X ", Rlc[i]);
+		printf("%02X ", ps->Key[i]);
+	printf("\nRLC(%d): ", ps->RlcLength);
+	for(i = 0; i < ps->RlcLength; i++)
+		printf("%02X ", ps->Rlc[i]);
 	printf("\n");
 }
 #endif
@@ -1687,7 +1687,7 @@ void PushPacket(BYTE *Buffer)
 			if (ps == NULL) {
 				// not SecureRegistered, use NODE_TABLE
 				PUBLICKEY *pt;
-				BYTE rlc[RLC_SIZE];
+				BYTE rlc[MAX_RLC_SIZE];
 				
 				nt = GetTableId(secId);
 				if (nt != NULL && nt->Secure != NULL) {
@@ -1719,12 +1719,12 @@ void PushPacket(BYTE *Buffer)
 			}
 			else {
 #ifdef SECURE_DEBUG
-				PrintKey(ps->Key, ps->Rlc);
+				PrintKey(ps);
 				printf("SEC: %08lX: HeadSz=%d Len=%d OLen=%d Tot=%d\n",
 				       secId, HEADER_SIZE, pb->Length, optionLength,
 				       HEADER_SIZE + pb->Length + optionLength);
 #endif				
-				sec = SecCreate(ps->Rlc, ps->Key);
+				sec = SecCreate(ps->Rlc, ps->Key, ps->RlcLength);
 				if (sec == NULL) {
 					Error("SecCreate error");
 					return;
@@ -1733,14 +1733,14 @@ void PushPacket(BYTE *Buffer)
 			}
 #ifdef SECURE_DEBUG
 			printf("ORG:");
-			for(i = 0; i < pb->Length; i++) {
-				printf(" %02X", pb->Buffer[i + HEADER_SIZE]);
+			for(i = 0; i < pb->Length - 1; i++) {
+				printf(" %02X", pb->Buffer[i + HEADER_SIZE + 1]);
 			}
 			printf("\n");
 #endif
-			pb->Length -= 8;
+			pb->Length -= 8; // need check!!
 			SecCheck(sec, &pb->Buffer[HEADER_SIZE + pb->Length]);
-			decLength = SecDecrypt(sec, &pb->Buffer[HEADER_SIZE], pb->Length, &pb->EncBuffer[HEADER_SIZE]);
+			decLength = SecDecrypt(sec, &pb->Buffer[HEADER_SIZE + 1], pb->Length, &pb->EncBuffer[HEADER_SIZE]);
 #ifdef SECURE_DEBUG
 			printf("DEC:");
 			for(i = 0; i < pb->Length + HEADER_SIZE + optionLength; i++) {
@@ -1855,9 +1855,12 @@ bool MainJob(BYTE *Buffer)
 			INT validLength;
             INT decLength;
 			INT cipherLength;
-			BYTE encBuffer[DATABUFSIZ - 8 - HEADER_SIZE - 1];
+			INT rlcLength = 0;
       	    INT i;
-			const int len_rlc_cmac = 8; //RLC(4) + CMAC(4) = 8 
+			PUBLICKEY *pt;
+			BYTE rlc[MAX_RLC_SIZE];
+			BYTE encBuffer[DATABUFSIZ - 8 - HEADER_SIZE - 1];
+			const int cmacLength = 4; 
 #ifdef SECURE_DEBUG
 			BYTE nextRlc[4];
 			//printf("+P"); PacketDump(&pb->Buffer[0]);
@@ -1865,13 +1868,10 @@ bool MainJob(BYTE *Buffer)
 			ps = GetSecureRegister(secId);
 			if (ps == NULL) {
 				// not SecureRegistered, use NODE_TABLE
-				PUBLICKEY *pt;
-				BYTE rlc[RLC_SIZE];
-
 				nt = GetTableId(secId);
 				if (nt != NULL && nt->Secure != NULL) {
 					sec = nt->Secure;
-					SecGetRlc(sec, rlc);
+					rlcLength = SecGetRlc(sec, rlc);
 
 					/* read RLC from file */
 					pt = GetPublickey(secId);
@@ -1879,8 +1879,8 @@ bool MainJob(BYTE *Buffer)
 					status = SecCheck(sec, pt->Rlc);
 
 					if (p->Debug > 1) {
-						printf("SECD:Registered, SecCheck=%d, old=%02X%02X%02X%02X new=%02X%02X%02X%02X\n",
-							status, rlc[0], rlc[1], rlc[2], rlc[3],
+						printf("SECD:Reg SecCheck=%d rlclen=%d old=%02X%02X%02X%02X new=%02X%02X%02X%02X\n",
+							status, rlcLength, rlc[0], rlc[1], rlc[2], rlc[3],
 							pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3]);
 					}
 				}
@@ -1899,35 +1899,45 @@ bool MainJob(BYTE *Buffer)
 			}
 	        else {
 #ifdef SECURE_DEBUG
-				PrintKey(ps->Key, ps->Rlc);
-				printf("SECD: %08lX: HeadSz=%d Len=%d OLen=%d Tot=%d\n",
-					secId, HEADER_SIZE, dataLength, optionLength,
+				PrintKey(ps);
+				printf("SECD: %08lX: HeadSz=%d Len=%d rlcLen=%d OLen=%d Tot=%d\n",
+					secId, HEADER_SIZE, dataLength, ps->RlcLength, optionLength,
 					dataLength + optionLength);
 #endif
 				sec = ps->Sec;
-				nt = GetTableId(secId);
-				if (nt != NULL) {
-#ifdef SECURE_DEBUG
-					printf("SECD: existing ID comming\n");
-#endif
-					nt->Secure = sec;
+				if (sec== NULL) {
+					fprintf(stderr, "ps but sec is NULL, %08lX:%d\n", secId, ps->Status);
+					break;
 				}
+				rlcLength = ps->RlcLength;
+
+				//nt = GetTableId(secId);
+				//if (nt == NULL) {
+				//	fprintf(stderr, "ps but nt is NULL, %08lX:%d\n", secId, ps->Status);
+				//	break;
+				//}
+				//else {
+#ifdef SECURE_DEBUG
+				//	printf("SECD: existing ID comming\n");
+#endif
+				//	nt->Secure = sec;
+				//}
 			}
 #ifdef SECURE_DEBUG
 			printf("ORG:");
-			for(i = 0; i < dataLength - HEADER_SIZE; i++) {
-				printf(" %02X", Buffer[i + HEADER_SIZE]); //Print without Header
+			for(i = 0; i < dataLength - HEADER_SIZE - 1; i++) {
+				printf(" %02X", Buffer[i + HEADER_SIZE + 1]); //Print without Header
 			}
 			printf("\n");
 #endif
-			validLength = dataLength - len_rlc_cmac; // vLen = Truncate RLC and CMAC
+			validLength = dataLength - cmacLength - rlcLength; // vLen = Truncate RLC and CMAC
 			cipherLength = validLength - HEADER_SIZE - 1; // vLen - HDR(5) - rORG(1)
 #ifdef SECURE_DEBUG
 			do {
 				int i;
 				BYTE *px = &Buffer[0];
 
-				printf("SecCheck(newLen)=%d(%d): ", validLength, cipherLength);
+				printf("SecCheck: valid=%d cipher=%d: ", validLength, cipherLength);
 				for(i = 0; i < validLength; i++) {
 					printf("%02X ", px[i]);
 				}
@@ -2107,7 +2117,7 @@ bool MainJob(BYTE *Buffer)
 						break;
 					}
 					nt->Secure = ps->Sec; // SEC_HANDLE
-					pt = AddPublickey(p, secId, ps->Rlc, ps->Key);
+					pt = AddPublickey(p, secId, ps);
 					if (pt == NULL) {
 						Error("AddPublickey");
 					}
@@ -2148,7 +2158,7 @@ bool MainJob(BYTE *Buffer)
 						break;
 					}
 					nt->Secure = ps->Sec; // SEC_HANDLE
-					pt = AddPublickey(p, secId, ps->Rlc, ps->Key);
+					pt = AddPublickey(p, secId, ps);
 					if (pt == NULL) {
 						Error("AddPublickey");
 					}
@@ -2171,6 +2181,8 @@ bool MainJob(BYTE *Buffer)
 
 		case 0x35: // SEC_TI
 			secId = ByteToId(id);
+			SEC_HANDLE sec;
+
 			//if (!newIdComming) {
 			//	// already registered, TODO: NEED check to update the Key and RLC
 			//	break;
@@ -2186,23 +2198,36 @@ bool MainJob(BYTE *Buffer)
 				ps->Status = FIRST_COME;
 				ps->Info = data[0];
 				ps->Slf = data[1];
-				memcpy(ps->Rlc, &data[2], 4); 
-				memcpy(ps->Key, &data[6], 8);
+				ps->RlcLength = RlcLength(ps->Slf);
+				memcpy(ps->Rlc, &data[2], ps->RlcLength);
+				memcpy(ps->Key, &data[2 + ps->RlcLength], 8);
+
+				if (dataLength >= 26) {
+					memcpy(ps->Key, &data[2 + ps->RlcLength], 16);
+					ps->Status = REGISTERED;
+					sec = SecCreate(ps->Rlc, ps->Key, ps->RlcLength);
+					if (sec == NULL) {
+						Error("SecCreate error");
+						break;
+					}
+					ps->Sec = sec;
+				}
 #ifdef SECURE_DEBUG
-				printf("SECURE1: Status==1, data[0]=%02X\n", data[0]);
-				PrintKey(ps->Key, ps->Rlc);
+				printf("SECURE1: data[0]=%02X Slf=%02X RlcLen=%d\n",
+					data[0], ps->Slf, ps->RlcLength);
+				PrintKey(ps);
 #endif
 			}
 			else if (ps->Status == FIRST_COME && (data[0] & 0xF0) == 0x40) {
-				SEC_HANDLE sec;
 				// This is the second TeachIn
 				memcpy(&ps->Key[8], &data[1], 8);
 				ps->Status = REGISTERED;
 #ifdef SECURE_DEBUG
-				printf("SECURE2: Status==1, data[0]=%02X\n", data[0]);
-				PrintKey(ps->Key, ps->Rlc);
+				printf("SECURE2: data[0]=%02X Slf=%02X RlcLen=%d\n",
+					data[0], ps->Slf, ps->RlcLength);
+				PrintKey(ps);
 #endif
-				sec = SecCreate(ps->Rlc, ps->Key);
+				sec = SecCreate(ps->Rlc, ps->Key, ps->RlcLength);
 				if (sec == NULL) {
 					Error("SecCreate error");
 					break;
@@ -2211,9 +2236,14 @@ bool MainJob(BYTE *Buffer)
 
 #ifdef SECURE_DEBUG
 				do {
+					INT i;
 					BYTE rlc[4];
 					(void) SecGetRlc(ps->Sec, rlc);
-					printf("=+Rlc:%02X %02X %02X %02X\n", rlc[0], rlc[1], rlc[2], rlc[3]);
+					printf("=+Rlc:");
+					for(i = 0; i < ps->RlcLength; i++) {
+						printf("%02X", rlc[0]);
+					}
+					printf("\n");
 				}
 				while(0);
 #endif
@@ -2508,11 +2538,17 @@ int main(int ac, char **av)
 	do {
 		initStatus = CO_WriteReset();
 		if (initStatus == OK) {
+			int forceERP2onESP3 = 0;
+
 			msleep(200);
 
-			initStatus = CO_WriteMode(
-				(p->Mode == Register /* Force ERP2 at Register for Teach-In */)
-				| (p->XFlags != 0) /* XFlags-->Force ERP2 */);
+			if (p->Mode == Register && p->XFlags > 0) {
+				forceERP2onESP3 = 1;
+			}
+			else if (p->XFlags > 1) {
+				forceERP2onESP3 = 1;
+			}
+			initStatus = CO_WriteMode(forceERP2onESP3);
 		}
 		if (initStatus == RET_NOT_SUPPORTED) {
 			printf("**main() Oops! this GW should be ERP1, and mark it.\n");
