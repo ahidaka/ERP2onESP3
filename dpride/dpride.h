@@ -117,6 +117,7 @@ typedef struct _node_table {
         int SCCount;
         char **SCuts;
         void *Secure; // Pointer to SecureTable
+        int SecureMark;
 } NODE_TABLE;
 
 //

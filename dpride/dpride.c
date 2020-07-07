@@ -607,6 +607,7 @@ int EoReadControl()
 #ifdef SECURE_DEBUG
 	printf("**EoReadControl: count=%d\n", count);
 #endif
+	//ReloadPublickey(p->PublickeyPath);
 	(void) CacheProfiles();
 	ReloadPublickey(p->PublickeyPath);
 	return count;
@@ -921,6 +922,7 @@ void EoSetEep(EO_CONTROL *P, byte *Id, byte *Data, uint Rorg)
 	time_t timep;
 	struct tm *time_inf;
 	char eep[12];
+	char sEep[12];
 	char idBuffer[12];
 	char buf[DATABUFSIZ];
 	char timeBuf[64];
@@ -929,7 +931,7 @@ void EoSetEep(EO_CONTROL *P, byte *Id, byte *Data, uint Rorg)
 
 	sprintf(idBuffer, "%02X%02X%02X%02X", Id[0], Id[1], Id[2], Id[3]);
 	if (P->VFlags) {
-		printf("EoSetEep:<%s>\n", idBuffer);
+		printf("EoSetEep:<%s>%s\n", idBuffer, Id[5] ? ":SEC" : "");
 	}
 
 	switch (Rorg) {
@@ -973,7 +975,10 @@ void EoSetEep(EO_CONTROL *P, byte *Id, byte *Data, uint Rorg)
 		return;
 	}
 
+	// Format EEP to string with secure mark //??//
 	sprintf(eep, "%02X-%02X-%02X", Rorg, func, type);
+	sprintf(sEep, "%s%s", Id[5] ? "!" : "", eep);
+	
 	eepTable = GetEep(eep);
 	if (eepTable == NULL) {
 		fprintf(stderr, "EoSetEep: %s EEP is not found=%s\n",
@@ -995,11 +1000,11 @@ void EoSetEep(EO_CONTROL *P, byte *Id, byte *Data, uint Rorg)
 
 	// SetNewEep //
 	timep = time(NULL);
-        time_inf = localtime(&timep);
-        strftime(timeBuf, sizeof(timeBuf), "%x %X", time_inf);
-	sprintf(buf, "%s,%s,%s,%s", timeBuf, idBuffer, eep, eepTable->Title);
+	time_inf = localtime(&timep);
+	strftime(timeBuf, sizeof(timeBuf), "%x %X", time_inf);
+	sprintf(buf, "%s,%s,%s,%s", timeBuf, idBuffer, sEep, eepTable->Title);
 
-        leadingBuffer = index(buf, ',') + 1; // buffer starts without time
+	leadingBuffer = index(buf, ',') + 1; // buffer starts without time
 	trailingBuffer = buf + strlen(buf);
 
 	pe = eepTable;
@@ -1615,8 +1620,8 @@ void PushPacket(BYTE *Buffer)
 		memcpy(&pb->Buffer[HEADER_SIZE], data, thisDataLength + rOrgByte);
 	}
 	else {
-		if (p->Debug > 1) {
-			printf("pb->Id:%02X%02X%02X%02X *(UINT*)&pb->Id[]:%08X *(UINT*)&Buffer[]:%08X\n",
+		if (p->Debug > 2) {
+			printf("IDCHK:pb->Id=%02X%02X%02X%02X *(UINT*)&pb->Id[]=%08X *(UINT*)&Buffer[]=%08X\n",
 			       pb->Id[0], pb->Id[1], pb->Id[2], pb->Id[3],
 			       *(UINT *) &pb->Id[0], *(UINT *) &Buffer[length]);
 		}
@@ -1836,7 +1841,7 @@ bool MainJob(BYTE *Buffer)
 			DataDump(data, dataLength - 6);
 		}
 
-		if (rOrg == 0x30 || rOrg == 0x31) { // SECR
+		if (rOrg == 0x31 || p->Mode == Operation && rOrg == 0x30) {
             SECURE_REGISTER *ps;
             ULONG secId = ByteToId(&id[0]);
             SEC_HANDLE sec;
@@ -1950,7 +1955,11 @@ bool MainJob(BYTE *Buffer)
 
 				if (rOrg == 0x30 && nt != NULL && nt->Eep[0] != '\0') {
 					dataStart = 1;
-					newOrg = ((0xA + (nt->Eep[0] - 'A')) << 4) | (nt->Eep[1] - '0');
+					i = 0;
+					if (nt->Eep[i] == '!') { // Skip Secure mark
+						i++;
+					}
+					newOrg = ((0xA + (nt->Eep[i] - 'A')) << 4) | (nt->Eep[i + 1] - '0');
 					Buffer[HEADER_SIZE] = newOrg;
 				}
 				for(i = 0; i < cipherLength; i++) {
@@ -2137,6 +2146,9 @@ bool MainJob(BYTE *Buffer)
 			if (newIdComming) {
 				PUBLICKEY *pt;
 
+				if (isSecure) {
+					id[5] = '!';
+				}
 				EoSetEep(p, id, data, rOrg);
 				idCount = EoReadControl();
 				ps = GetSecureRegister(secId);
