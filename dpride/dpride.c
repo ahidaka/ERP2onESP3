@@ -604,8 +604,11 @@ int EoReadControl()
 	count = ReadModel(p->ModelPath);
 	count += ReadCsv(p->ControlPath);
 	p->ControlCount = count;
-	ReloadPublickey(p->PublickeyPath);
+#ifdef SECURE_DEBUG
+	printf("**EoReadControl: count=%d\n", count);
+#endif
 	(void) CacheProfiles();
+	ReloadPublickey(p->PublickeyPath);
 	return count;
 }
 
@@ -1557,20 +1560,6 @@ void NotifyBrokers(long num)
 	}
 }
 
-#ifdef SECURE_DEBUG
-static void PrintKey(SECURE_REGISTER *ps)
-{
-	int i;
-	printf("KEY: ");
-	for(i = 0; i < 16; i++)
-		printf("%02X ", ps->Key[i]);
-	printf("\nRLC(%d): ", ps->RlcLength);
-	for(i = 0; i < ps->RlcLength; i++)
-		printf("%02X ", ps->Rlc[i]);
-	printf("\n");
-}
-#endif
-
 void PushPacket(BYTE *Buffer)
 {
 	EO_CONTROL *p = &EoControl;
@@ -1847,7 +1836,7 @@ bool MainJob(BYTE *Buffer)
 			DataDump(data, dataLength - 6);
 		}
 
-		if (rOrg == 0x31) { // SECR
+		if (rOrg == 0x30 || rOrg == 0x31) { // SECR
             SECURE_REGISTER *ps;
             ULONG secId = ByteToId(&id[0]);
             SEC_HANDLE sec;
@@ -1950,27 +1939,72 @@ bool MainJob(BYTE *Buffer)
 			}
 			while(0);
 #endif
-			(void) SecCheck(sec, &Buffer[validLength]);
-			decLength = SecDecrypt(sec, &Buffer[HEADER_SIZE + 1],
-				cipherLength, &encBuffer[0]);
-			for(i = 0; i < cipherLength; i++) {
-				Buffer[HEADER_SIZE + i] = encBuffer[i];
-			}
-			// update new length = old length -1, and replace data
-			do{
-				INT newLength = dataLength - 1;
-				Buffer[0] = newLength >> 8;
-				Buffer[1] = newLength & 0xFF;
-				for(i = HEADER_SIZE + cipherLength; i < newLength; i++){
-					Buffer[i] = Buffer[i + 1];
+			do {
+				INT newLength;
+				INT dataStart = 0;
+				BYTE newOrg = 0;
+
+				(void) SecCheck(sec, &Buffer[validLength]);
+				decLength = SecDecrypt(sec, &Buffer[HEADER_SIZE + 1],
+					cipherLength, &encBuffer[0]);
+
+				if (rOrg == 0x30 && nt != NULL && nt->Eep[0] != '\0') {
+					dataStart = 1;
+					newOrg = ((0xA + (nt->Eep[0] - 'A')) << 4) | (nt->Eep[1] - '0');
+					Buffer[HEADER_SIZE] = newOrg;
 				}
-				for(i = newLength; i < newLength + optionLength; i++){
-					Buffer[i] = Buffer[i + 1];
+				for(i = 0; i < cipherLength; i++) {
+					Buffer[HEADER_SIZE + dataStart + i] = encBuffer[i];
 				}
+				// update new length = old length -1, and replace data
+
+				newLength = dataLength - 1 + dataStart;
+				if (dataStart == 0) {
+					Buffer[0] = newLength >> 8;
+					Buffer[1] = newLength & 0xFF;
+					for(i = HEADER_SIZE + cipherLength; i < newLength; i++){
+						Buffer[i] = Buffer[i + 1];
+					}
+					for(i = newLength; i < newLength + optionLength; i++){
+						Buffer[i] = Buffer[i + 1];
+					}
+				}
+#ifdef SECURE_DEBUG
+				printf("DEC: newOrg=%02X cipLen=%d decLen=%d datSt=%d newLen=%d dLen=%d oLen=%d\n",
+					newOrg, cipherLength, decLength, dataStart, 
+					newLength, dataLength, optionLength);
+#endif
 			}
 			while(0);
+
 			rOrg = Buffer[HEADER_SIZE];
-	        teachIn = (data[0] & 0x08) == 0;
+
+			// Decrypt completed //
+			// Re-Inspect teachIn or Not //
+			switch(rOrg) {
+			case 0xF6: // RPS
+				teachIn = TRUE; // RPS telegram. always Teach-In
+				break;
+			case 0xD5: // 1BS
+				teachIn = (data[0] & 0x08) == 0;
+				break;
+			case 0xA5: // 4BS
+				teachIn = (data[3] & 0x08) == 0;
+				break;
+			case 0xD2:  // VLD
+				if (dataLength == 7 && optionLength == 7
+					&& data[0] == 0x80 && status == 0x80) {
+					// D2-03-20
+					printf("**Sec VLD teachIn=D2-03-20\n");
+					teachIn = TRUE;
+					D2_Special = TRUE;
+				}
+				break;
+			case 0xD4: // UTE
+				teachIn = TRUE;
+				break;
+			}
+			// Mark this is secure.
 			isSecure = TRUE;
 #ifdef SECURE_DEBUG
 			printf("DEC:");
@@ -2065,7 +2099,7 @@ bool MainJob(BYTE *Buffer)
 		while(0);
 		//return false;
 		break;
-	}
+	} // End switch(rOrg)
 
 	if (packetType != RadioErp1) {
 		fprintf(stderr, "%s: Unknown type = %02X (%d %d)\n",
@@ -2073,10 +2107,11 @@ bool MainJob(BYTE *Buffer)
 		//return false;
 	}
 
-	if (p->VFlags)
+	if (p->VFlags) {
 		printf("mode:%s id:%02X%02X%02X%02X rOrg:%02X %s\n", //here!
-		       p->Mode == Register ? "Register" : p->Mode == Operation ? "Operation" : "Monitor",
-		       id[0] , id[1] , id[2] , id[3], rOrg, teachIn ? "T" : "");
+			p->Mode == Register ? "Register" : p->Mode == Operation ? "Operation" : "Monitor",
+			id[0] , id[1] , id[2] , id[3], rOrg, teachIn ? "T" : "");
+	}
 
 	if (teachIn && p->Mode == Monitor) {
 #if CMD_DEBUG

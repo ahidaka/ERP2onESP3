@@ -170,21 +170,31 @@ static SCAN_STATUS ScanLine(CHAR *Buffer, PUBLICKEY *pt)
 				pt->Id = strtoul(target, NULL, 16);
 				status = GotId;
 				i = 0;
+#ifdef SECURE_DEBUG
+				printf("$$Id=%08X\n", pt->Id);
+#endif
 				break;
 			case GotId:
 				ToHexDecimal(target, pt->Rlc);
 				status = GotRlc;
 				pt->RlcLength = strlen(target) / 2;
 				i = 0;
+#ifdef SECURE_DEBUG
+				printf("$$Rlc()%d=%02X%02X%02X%02X\n", pt->RlcLength,
+					pt->Rlc[0],pt->Rlc[1],pt->Rlc[2],pt->Rlc[3]);
+#endif
 				break;
 			case GotRlc:
 				ToHexDecimal(target, pt->Key);
 				status = GotKey;
-#ifdef SECURE_DEBUG
-				printf("status=%d char=%02X length=%ld\n",
-				       status, p ? *p : -1, (long) (p - &Buffer[0]));
-#endif
 				i = 0;
+#ifdef SECURE_DEBUG
+				printf("$$status=%d char=%02X length=%ld\n",
+				       status, p ? *p : -1, (long) (p - &Buffer[0]));
+				printf("$$Key=%02X%02X%02X%02X %02X%02X%02X%02X\n",
+					pt->Key[0],pt->Key[1],pt->Key[2],pt->Key[3],
+					pt->Key[4],pt->Key[5],pt->Key[6],pt->Key[7]);
+#endif
 				break;
 			default:
 				status = Error;
@@ -305,6 +315,9 @@ VOID ReloadPublickey(char *PublickeyPath)
 				Error("Publickey ScanLine error");
 				break; // continue ??
 			}
+#ifdef SECURE_DEBUG
+			PrintKey((SECURE_REGISTER*) pt);
+#endif
 			nt = GetTableId(pt->Id);
 			if (nt != NULL) {
 				sec = SecCreate(pt->Rlc, pt->Key, pt->RlcLength);
@@ -535,6 +548,19 @@ INT RlcLength(INT Slf)
 		break;
 	}
 	return length;
+}
+
+void PrintKey(SECURE_REGISTER *ps)
+{
+	int i;
+	printf("ID: %08X\n", ps->Id);
+	printf("KEY: ");
+	for(i = 0; i < 16; i++)
+		printf("%02X ", ps->Key[i]);
+	printf("\nRLC(%d): ", ps->RlcLength);
+	for(i = 0; i < ps->RlcLength; i++)
+		printf("%02X ", ps->Rlc[i]);
+	printf(", SLF=%02X\n", ps->Slf);
 }
 
 //

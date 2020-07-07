@@ -34,29 +34,20 @@ INT SecDecrypt(SEC_HANDLE h, BYTE *Packet, INT Length, BYTE *Data);
 
 //
 // Publickey supporting stuff
+// Security supporting stuff
 //
 typedef struct _pulickey {
 	UINT Id;
 	UINT RlcLength;
+	UINT Slf;
 	BYTE Rlc[MAX_RLC_SIZE];
 	BYTE Key[KEY_SIZE];
 	CHAR *RlcPath;
 	INT Option; // for advanced use to hide keys
-} PUBLICKEY;
-
-//
-// Security supporting stuff
-//
-typedef struct _secure_register {
-	UINT Id;
 	PACKET_ENTRY Status;
 	INT Info;
-	INT Slf;
-	INT RlcLength;
 	SEC_HANDLE Sec;
-	BYTE Rlc[MAX_RLC_SIZE];
-	BYTE Key[KEY_SIZE];
-} SECURE_REGISTER;
+} PUBLICKEY, SECURE_REGISTER;
 
 #define SECURE_REGISTER_SIZE (4)
 
@@ -76,6 +67,9 @@ VOID DeletePublickey(char *PublickeyPath);
 PUBLICKEY *AddPublickey(EO_CONTROL *p, UINT Id, SECURE_REGISTER *ps);
 PUBLICKEY *GetPublickey(UINT Id);
 PUBLICKEY *ClearPublickey(UINT Id);
+
+void PrintKey(SECURE_REGISTER *ps);
+
 #if SEC_DEVELOP	
 VOID ReadRlc(PUBLICKEY *pt);
 VOID WriteRlc(PUBLICKEY *pt);
