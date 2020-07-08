@@ -16,7 +16,7 @@
 //#define EEP_DEBUG (1)
 //#define VLD_DEBUG (1)
 //#define CD_DEBUG (1)
-//#define MODEL_DEBUG (1)
+#define MODEL_DEBUG (1)
 
 extern void PrintProfileAll(void);
 extern NODE_TABLE NodeTable[];

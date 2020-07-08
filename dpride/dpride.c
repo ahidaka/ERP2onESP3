@@ -27,13 +27,15 @@
 static const char copyright[] = "\n(c) 2017 Device Drivers, Ltd. \n";
 static const char version[] = "\n@ dpride Version 1.26 \n";
 
-#define ERP2_DEBUG (1)
+//#define ERP2_DEBUG (1)
 #define SECURE_DEBUG (1)
 //#define FILTER_DEBUG (1)
 //#define CMD_DEBUG (1)
 //#define CT_DEBUG (1)
 //#define SIG_DEBUG (1)
-#define RAW_INPUT (1)
+#define MSG_DEBUG (1)
+#define RAW_INPUT (1) // RAW_INPUT Dosplay for ERP2 DEBUG
+
 //
 #define msleep(a) usleep((a) * 1000)
 
@@ -1197,6 +1199,9 @@ void LogMessageStart(uint Id, char *Eep, char *Prefix)
 			sprintf(EoLogMonitorMessage, "%s,%08X,", buf, Id);
 		}
 	}
+#ifdef MSG_DEBUG
+	printf("MSG##%s<%s>\n", __FUNCTION__, EoLogMonitorMessage);
+#endif
 }
 
 void LogMessageAdd(char *Point, double Data, char *Unit)
@@ -1207,6 +1212,10 @@ void LogMessageAdd(char *Point, double Data, char *Unit)
 		sprintf(buf, "%s=%.2lf%s ", Point, Data, Unit);
 		strcat(EoLogMonitorMessage, buf);
 	}
+#ifdef MSG_DEBUG
+	printf("MSG##%s<%s>\n", __FUNCTION__, EoLogMonitorMessage);
+#endif
+
 }
 
 void LogMessageAddInt(char *Point, int Data)
@@ -1255,6 +1264,10 @@ void LogMessageOutput()
 	if (p->LocalLog > 0) {
 		EoLogRaw(EoLogMonitorMessage);
 	}
+#ifdef MSG_DEBUG
+	printf("MSG##%s<%s>\n", __FUNCTION__, EoLogMonitorMessage);
+#endif
+
 }
 
 //
@@ -1581,6 +1594,7 @@ void PushPacket(BYTE *Buffer)
 	NODE_TABLE *nt = NULL;
 	const int rOrgByte = 1;
 	const int cdmHeader = 2;
+	const int trailBytes = 5; //Dst:FFFFFFFF(4) + stat(1))
 
 	length = (INT) (Buffer[0] << 8 | Buffer[1]);
 	optionLength = (INT) Buffer[2];
@@ -1620,13 +1634,15 @@ void PushPacket(BYTE *Buffer)
 		memcpy(&pb->Buffer[HEADER_SIZE], data, thisDataLength + rOrgByte);
 	}
 	else {
-		if (p->Debug > 2) {
-			printf("IDCHK:pb->Id=%02X%02X%02X%02X *(UINT*)&pb->Id[]=%08X *(UINT*)&Buffer[]=%08X\n",
-			       pb->Id[0], pb->Id[1], pb->Id[2], pb->Id[3],
-			       *(UINT *) &pb->Id[0], *(UINT *) &Buffer[length]);
-		}
+		// This was solved.
+		//if (p->Debug > 2) {
+		//	printf("IDCHK:pb->Id=%02X%02X%02X%02X *(UINT*)&pb->Id[]=%08X *(UINT*)&Buffer[]=%08X\n",
+		//	       pb->Id[0], pb->Id[1], pb->Id[2], pb->Id[3],
+		//	       *(UINT *) &pb->Id[0], *(UINT *) &Buffer[length]);
+		//}
 
 		if (*(UINT *) &pb->Id[0] == *(UINT *) &Buffer[length]) {
+			// copy data
 			memcpy(&pb->Buffer[HEADER_SIZE + pb->CurrentLength + (rOrgByte & !secureMark)], data, thisDataLength);
 		}
 		else {
@@ -1646,8 +1662,8 @@ void PushPacket(BYTE *Buffer)
 		//When Secure-Telegram, adjust encapslated R-Org length  
 		//pb->Length -= secureMark;
 		//The last packet, Make Header
-		pb->Buffer[0] = (HEADER_SIZE + pb->Length + (rOrgByte & !secureMark)) >> 8;
-		pb->Buffer[1] = (HEADER_SIZE + pb->Length + (rOrgByte & !secureMark)) & 0xFF;
+		pb->Buffer[0] = (pb->Length + (rOrgByte & !secureMark) + trailBytes) >> 8;
+		pb->Buffer[1] = (pb->Length + (rOrgByte & !secureMark) + trailBytes) & 0xFF;
 		pb->Buffer[2] = optionLength;
 		pb->Buffer[3] = 1; // Type: RADIO_ERP1
 		pb->Buffer[4] = 0; // CRC
@@ -1657,7 +1673,14 @@ void PushPacket(BYTE *Buffer)
 			printf("CM %d-%d: thisLen=%d Queue=%d,%d opt=%d,%d\n", seq, index, thisDataLength,
 			       pb->CurrentLength, pb->Length, optionLength, pb->OptionLength);
 		}
-		memcpy(&pb->Buffer[HEADER_SIZE + pb->Length + (rOrgByte & !secureMark)], &Buffer[length], optionLength);
+
+		//printf("+++B"); PacketDump(&Buffer[0]);
+		//printf("+++p"); PacketDump(&pb->Buffer[0]);
+		//printf("+++p: pb->Length=%d Mark=%08X length=%d\n", pb->Length, secureMark, length);
+
+		// copy trail-bytes(Dst:FFFFFFFF + stat) + option
+		memcpy(&pb->Buffer[HEADER_SIZE + pb->Length + (rOrgByte & !secureMark)],
+			&Buffer[HEADER_SIZE + length - trailBytes], trailBytes + optionLength);
 
 		if (secureMark) { // SEC_CDM (rOrg == 0x33)
 			SECURE_REGISTER *ps;
@@ -1669,13 +1692,17 @@ void PushPacket(BYTE *Buffer)
 			INT i;
 			BYTE nextRlc[4];
 			printf("+P"); PacketDump(&pb->Buffer[0]);
-#endif			
-			memcpy(&pb->EncBuffer[0], &pb->Buffer[0], HEADER_SIZE + pb->Length + optionLength); 
+#endif
+			//memcpy(&pb->EncBuffer[0], &pb->Buffer[0], HEADER_SIZE + pb->Length + trailBytes + optionLength); 
 
 			/* Need to make new Header to EncBuffer !!*/
 			pb->EncBuffer[0] = (HEADER_SIZE + pb->Length - 8) >> 8;
 			pb->EncBuffer[1] = (HEADER_SIZE + pb->Length - 8) & 0xFF;
-			memcpy(&pb->EncBuffer[HEADER_SIZE + pb->Length - 8], &Buffer[length], optionLength);
+			pb->EncBuffer[2] = optionLength;
+			pb->EncBuffer[3] = 1; // Type: RADIO_ERP1
+			pb->EncBuffer[4] = 0; // CRC
+
+			memcpy(&pb->EncBuffer[HEADER_SIZE + pb->Length - 8], &Buffer[length], trailBytes + optionLength);
 			
 			ps = GetSecureRegister(secId);
 			if (ps == NULL) {
@@ -1728,23 +1755,27 @@ void PushPacket(BYTE *Buffer)
 #ifdef SECURE_DEBUG
 			printf("ORG:");
 			for(i = 0; i < pb->Length - 1; i++) {
-				printf(" %02X", pb->Buffer[i + HEADER_SIZE + 1]);
+				printf(" %02X", pb->Buffer[i + HEADER_SIZE]);
 			}
 			printf("\n");
 #endif
-			pb->Length -= 8; // need check!!
+			pb->Length -= 8; // Actual decrypt length (== declength?)
 			SecCheck(sec, &pb->Buffer[HEADER_SIZE + pb->Length]);
-			decLength = SecDecrypt(sec, &pb->Buffer[HEADER_SIZE + 1], pb->Length, &pb->EncBuffer[HEADER_SIZE]);
+			decLength = SecDecrypt(sec, &pb->Buffer[HEADER_SIZE], pb->Length, &pb->EncBuffer[HEADER_SIZE]);
+
+			length = pb->EncBuffer[0] << 8 | pb->EncBuffer[1];
+			optionLength = pb->EncBuffer[2];
 #ifdef SECURE_DEBUG
 			printf("DEC:");
-			for(i = 0; i < pb->Length + HEADER_SIZE + optionLength; i++) {
+			for(i = 0; i < HEADER_SIZE + length + optionLength; i++) {
 				printf(" %02X", pb->EncBuffer[i]);
 			}
 			printf("\n");
 #endif
 			if (p->Debug > 1) {
 				//#ifdef SECURE_DEBUG
-				printf("SEC: declength=%d, pb->Length=%d\n", decLength, pb->Length);
+				printf("SEC: declength=%d pb->Length=%d length=%d optionLength=%d\n",
+					decLength, pb->Length, length, optionLength);
 			}
 			// Currently we don't care RLC and CMAC
 			SecUpdate(sec);
@@ -1752,7 +1783,7 @@ void PushPacket(BYTE *Buffer)
 			(void) SecGetRlc(sec, nextRlc);
 			printf("++nextRlc:%02X %02X %02X %02X\n", nextRlc[0], nextRlc[1], nextRlc[2], nextRlc[3]);
 #endif
-			QueueData(&DataQueue, pb->EncBuffer, HEADER_SIZE + pb->Length + optionLength);
+			QueueData(&DataQueue, pb->EncBuffer,  HEADER_SIZE + length + optionLength);
 		}
 		else {
 			QueueData(&DataQueue, pb->Buffer, HEADER_SIZE + pb->Length + rOrgByte + optionLength);
@@ -2326,9 +2357,9 @@ bool MainJob(BYTE *Buffer)
 		int nodeIndex = -1;
 		uint uid = ByteToId(id);
 
-		LogMessageStart(uid, GetTableEep(uid), isSecure ? "!" : "");
 		switch(rOrg) {
 		case 0xF6: //RPS:
+			LogMessageStart(uid, GetTableEep(uid), isSecure ? "!" : "");
 			if (CheckTableId(ByteToId(id))) {
 				WriteRpsBridgeFile(ByteToId(id), data);
 				nodeIndex = GetTableIndex(ByteToId(id));
@@ -2336,7 +2367,12 @@ bool MainJob(BYTE *Buffer)
 					NotifyBrokers((long) nodeIndex);
 				}
 			}
+			LogMessageAddDbm(data[dataLength + 4]);
+			LogMessageOutput();
+			break;
+
 		case 0xD5: //1BS:
+			LogMessageStart(uid, GetTableEep(uid), isSecure ? "!" : "");
 			if (!teachIn && CheckTableId(ByteToId(id))) {
 				Write1bsBridgeFile(ByteToId(id), data);
 				nodeIndex = GetTableIndex(ByteToId(id));
@@ -2344,9 +2380,12 @@ bool MainJob(BYTE *Buffer)
 					NotifyBrokers((long) nodeIndex);
 				}
 			}
+			LogMessageAddDbm(data[dataLength + 4]);
+			LogMessageOutput();
 			break;
 			
 		case 0xD2: //VLD:
+			LogMessageStart(uid, GetTableEep(uid), isSecure ? "!" : "");
 			if (D2_Special || !teachIn && CheckTableId(ByteToId(id))) {
 				WriteVldBridgeFile(ByteToId(id), data);
 				nodeIndex = GetTableIndex(ByteToId(id));
@@ -2355,9 +2394,12 @@ bool MainJob(BYTE *Buffer)
 						NotifyBrokers((long) nodeIndex);
 				}
 			}
+			LogMessageAddDbm(data[dataLength + 4]);
+			LogMessageOutput();
 			break;
 
 		case 0xA5: //4BS:
+			LogMessageStart(uid, GetTableEep(uid), isSecure ? "!" : "");
 			if (!teachIn && CheckTableId(ByteToId(id))) {
 				Write4bsBridgeFile(ByteToId(id), data);
 				nodeIndex = GetTableIndex(ByteToId(id));
@@ -2366,6 +2408,8 @@ bool MainJob(BYTE *Buffer)
 						NotifyBrokers((long) nodeIndex);
 				}
 			}
+			LogMessageAddDbm(data[dataLength + 4]);
+			LogMessageOutput();
 			break;
 
 		case 0xB2: //CM_CD:
@@ -2409,8 +2453,6 @@ bool MainJob(BYTE *Buffer)
 			data[dataLength + 4],data[dataLength + 5],data[dataLength + 6],data[dataLength + 7],
 			data[dataLength + 8],data[dataLength + 9],data[dataLength + 10],data[dataLength + 11]);
 #endif
-		LogMessageAddDbm(data[dataLength + 4]);
-		LogMessageOutput();
 	}
 	
 	if (p->Debug > 2)
