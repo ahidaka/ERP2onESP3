@@ -2413,7 +2413,8 @@ bool MainJob(BYTE *Buffer)
 			break;
 
 		case 0xB2: //CM_CD:
-		case 0x07: //CM_CD on ERP2:
+		//case 0x07: //CM_CD on ERP2:
+			LogMessageStart(uid, GetTableEep(uid), isSecure ? "!" : "");
 			if (CheckTableId(ByteToId(id))) {
 				WriteCdBridgeFile(ByteToId(id), data);
 				nodeIndex = GetTableIndex(ByteToId(id));
@@ -2422,9 +2423,12 @@ bool MainJob(BYTE *Buffer)
 						NotifyBrokers((long) nodeIndex);
 				}
 			}
+			LogMessageAddDbm(data[dataLength + 4]);
+			LogMessageOutput();
 			break;
 
 		case 0xB3: //CM_SD:
+			LogMessageStart(uid, GetTableEep(uid), isSecure ? "!" : "");
 			if (CheckTableId(ByteToId(id))) {
 				WriteSdBridgeFile(ByteToId(id), data);
 				nodeIndex = GetTableIndex(ByteToId(id));
@@ -2433,6 +2437,8 @@ bool MainJob(BYTE *Buffer)
 						NotifyBrokers((long) nodeIndex);
 				}
 			}
+			LogMessageAddDbm(data[dataLength + 4]);
+			LogMessageOutput();
 			break;
 
 		case 0xD4: //UTE
