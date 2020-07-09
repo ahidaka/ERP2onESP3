@@ -345,7 +345,7 @@ void *ReadThread(void *arg)
 #if RAW_INPUT
 			if (1) {
 				BYTE dataType = dataBuffer[5];
-				printf("**:");
+				printf("*_:");
 				PacketDump(dataBuffer);
 				printf("D:dLen=%d oLen=%d tot=%d typ=%02X daT=%02X\n",
 					dataLength, optionLength, totalLength, packetType, dataType);
@@ -977,7 +977,8 @@ void EoSetEep(EO_CONTROL *P, byte *Id, byte *Data, uint Rorg)
 		return;
 	}
 
-	// Format EEP to string with secure mark //??//
+	///////////////////////////////////////////
+	// Format EEP to string with secure mark //
 	sprintf(eep, "%02X-%02X-%02X", Rorg, func, type);
 	sprintf(sEep, "%s%s", Id[5] ? "!" : "", eep);
 	
@@ -1578,6 +1579,21 @@ void NotifyBrokers(long num)
 	}
 }
 
+BOOL IsSecureCDM(BYTE *Buffer)
+{
+	//pb = &CdmBuffer[seq | (secureMark << 2)];
+	INT i;
+	//INT statSeq = 0 | (1 << 2);
+	CDM_BUFFER *pb = &CdmBuffer[0 | (1 << 2)];
+	for(i = 0; i < 4; i++, pb++) {
+		if (*(UINT *) &pb->Id[0] == *(UINT *) Buffer) {
+			// matched
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 void PushPacket(BYTE *Buffer)
 {
 	EO_CONTROL *p = &EoControl;
@@ -1778,7 +1794,10 @@ void PushPacket(BYTE *Buffer)
 					decLength, pb->Length, length, optionLength);
 			}
 			// Currently we don't care RLC and CMAC
-			SecUpdate(sec);
+			if (SecUpdate(sec) <= 0) {
+				Error("SecUpdate error");
+				return;
+			}
 #ifdef SECURE_DEBUG
 			(void) SecGetRlc(sec, nextRlc);
 			printf("++nextRlc:%02X %02X %02X %02X\n", nextRlc[0], nextRlc[1], nextRlc[2], nextRlc[3]);
@@ -1819,7 +1838,7 @@ bool MainJob(BYTE *Buffer)
 	rOrg = Buffer[HEADER_SIZE];
 	idCount = -1;
 	
-	PacketAnalyze(Buffer);
+	printf("*A"); PacketAnalyze(Buffer);
 
 	if (p->Debug > 0) {
 		printf("*M"); PacketDump(Buffer);
@@ -1889,6 +1908,7 @@ bool MainJob(BYTE *Buffer)
 #ifdef SECURE_DEBUG
 			BYTE nextRlc[4];
 			//printf("+P"); PacketDump(&pb->Buffer[0]);
+			printf("call GetSecureRegister:%08lX(%02X)\n", secId, rOrg);
 #endif
 			ps = GetSecureRegister(secId);
 			if (ps == NULL) {
@@ -2059,7 +2079,10 @@ bool MainJob(BYTE *Buffer)
 					rOrg, teachIn ? "T" : "", decLength, dataLength);
 			}
 			// Currently we don't care RLC and CMAC
-			SecUpdate(sec);
+			if (SecUpdate(sec) <= 0) {
+				Error("SecUpdate error");
+				break;
+			}
 #ifdef SECURE_DEBUG
 			(void) SecGetRlc(sec, nextRlc);
 			printf("++nextRlc:%02X %02X %02X %02X\n", nextRlc[0], nextRlc[1], nextRlc[2], nextRlc[3]);
@@ -2177,7 +2200,7 @@ bool MainJob(BYTE *Buffer)
 			if (newIdComming) {
 				PUBLICKEY *pt;
 
-				if (isSecure) {
+				if (isSecure || IsSecureCDM(id)) {
 					id[5] = '!';
 				}
 				EoSetEep(p, id, data, rOrg);
@@ -2485,6 +2508,10 @@ int main(int ac, char **av)
 	bool initStatus;
 	BYTE versionString[64];
 	EO_CONTROL *p = &EoControl;
+	ERP_MODE modeRegister;
+	ERP_MODE modeOperation;
+	ERP_MODE modeMonitor;
+	ERP_MODE modeSet;
 	//extern void PrintEepAll();
 	extern void PrintProfileAll();
 
@@ -2530,21 +2557,49 @@ int main(int ac, char **av)
 	if (p->Logger) {
 		MonitorStart();
 	}
+
+	switch(p->XFlags) {
+	case 1:
+		modeRegister = ERP1;
+		modeOperation = ERP1;
+		modeMonitor = ERP1;
+		break;
+	case 2:
+		modeRegister = ERP2;
+		modeOperation = ERP2;
+		modeMonitor = ERP1;
+		break;
+	case 3:
+		modeRegister = ERP2;
+		modeOperation = ERP2;
+		modeMonitor = ERP2;
+		break;
+	case 0:
+	default:
+		modeRegister = ERP2;
+		modeOperation = ERP1;
+		modeMonitor = ERP1;
+		break;
+	}
+
 	switch(p->Mode) {
 	case Monitor:
 		p->FilterOp = Ignore;
+		modeSet = modeMonitor;
 		if (p->VFlags)
 			fprintf(stderr, "Start monitor mode.\n");
 		break;
 
 	case Register:
 		p->FilterOp = p->CFlags ? Clear : Ignore;
+		modeSet = modeRegister;
 		if (p->VFlags)
 			fprintf(stderr, "Start register mode.\n");
 		break;
 
 	case Operation:
 		p->FilterOp = Read;
+		modeSet = modeOperation;
 		if (p->VFlags)
 			fprintf(stderr, "Start operation mode.\n");
 		break;
@@ -2633,17 +2688,9 @@ int main(int ac, char **av)
 	do {
 		initStatus = CO_WriteReset();
 		if (initStatus == OK) {
-			int forceERP2onESP3 = 0;
-
 			msleep(200);
 
-			if (p->Mode == Register && p->XFlags > 0) {
-				forceERP2onESP3 = 1;
-			}
-			else if (p->XFlags > 1) {
-				forceERP2onESP3 = 1;
-			}
-			initStatus = CO_WriteMode(forceERP2onESP3);
+			initStatus = CO_WriteMode(modeSet); // ERP1:0 or ERP2:1
 		}
 		if (initStatus == RET_NOT_SUPPORTED) {
 			printf("**main() Oops! this GW should be ERP1, and mark it.\n");

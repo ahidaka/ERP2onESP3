@@ -43,6 +43,11 @@ typedef enum _eo_mode
         Monitor, Register, Operation
 } EO_MODE;
 
+typedef enum _erp_mode
+{
+        ERP1=0, ERP2=1
+} ERP_MODE;
+
 typedef struct _eo_control
 {
         EO_MODE Mode;

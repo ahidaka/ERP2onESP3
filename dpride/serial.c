@@ -150,7 +150,10 @@ INT PacketAnalyze(BYTE *p)
 				break;
 			case 0xF:
 				extendedTelegramTypeAvailable = TRUE;
-				rORG = ExtendedTelegramTypes[extendedTelegramType & 0x7];
+				rORG = ((extendedTelegramType & 0xF0) == 0x30) // is Secure ?
+					? extendedTelegramType
+					: ExtendedTelegramTypes[extendedTelegramType & 0x7];
+				printf("A:%2X %2X %2X\n", telegramType, extendedTelegramType, rORG);
 				break;
 			case 0xB:
 			case 0xC:
@@ -215,7 +218,8 @@ INT PacketAnalyze(BYTE *p)
 		//for(i = 0; i < 128; i++) {
 		//	converted[i] = 0;
 		//}
-		_DEBUG2 printf("***B: dLen=%d oLen=%d\n", dataLength, optionalLength);
+		_DEBUG printf("***ERP2Convert: rOrg=[%02X %02X]->%02X new dLen=%d oLen=%d\n",
+			telegramType, extendedTelegramType, rORG, dataLength, optionalLength);
 
 		p = pPacket;
 		dataLength -= originatorLength;
@@ -232,8 +236,6 @@ INT PacketAnalyze(BYTE *p)
 		converted[3] = 0x01; //RADIO_ERP1
 		converted[4] = 0x00; //CRC8H
 
-		_DEBUG2 printf("***A: dLen=%d oLen=%d\n", dataLength, optionalLength);
-
 		// Data
 		converted[headerLength] = rORG;
 		p += headerLength;
@@ -241,10 +243,6 @@ INT PacketAnalyze(BYTE *p)
 		p += extendedTelegramTypeAvailable;
 		p += originatorLength;
 		for (i = 0; i < (dataLength - erp1IdLength - 2 /* status, rORG */); i++) {
-
-			_DEBUG2 printf("*****%d:%d=%d(%02X)\n", i,
-				headerLength + 1 + i, (int)(p - pPacket), *p);
-
 			converted[headerLength + 1 + i] = *p++;
 		}
 		status = *p++;
@@ -366,7 +364,7 @@ STATES_GET_PACKET;
 			break;
 
 		case CHECK_CRC8H:
-			_DEBUG printf("*** CHECK_CRC8H=%d\n", count);
+			_DEBUG2 printf("**** CHECK_CRC8H=%d\n", count);
 			crc = Crc8Check(line, HEADER_BYTES);
 			if (crc != rxByte) {
 				fprintf(stderr, "*** CRC8H ERROR %02X:%02X\n", crc, rxByte);
@@ -398,7 +396,7 @@ STATES_GET_PACKET;
 				}
 				break;
 			}
-			_DEBUG printf("*** CRC8H OK!\n");
+			_DEBUG2 printf("**** CRC8H OK!\n");
 
 			dataLength = (line[0] << 8) + line[1];
 			optionLength = line[2];
@@ -415,9 +413,9 @@ STATES_GET_PACKET;
 				status = GET_SYNC;
 				return OUT_OF_RANGE;
 			}
-			_DEBUG printf("*** datLen=%d optLen=%d type=%02X\n",
+			_DEBUG2 printf("**** datLen=%d optLen=%d type=%02X\n",
 				dataLength, optionLength, type);
-			_DEBUG printf("*** %02X %02X %02X %02X\n",
+			_DEBUG2 printf("**** %02X %02X %02X %02X\n",
 				line[0], line[1], line[2], line[3]);
 			status = GET_DATA;
 			count = 0;
@@ -432,13 +430,13 @@ STATES_GET_PACKET;
 			}
 
 			if (++count == (dataLength + optionLength)) {
-				_DEBUG printf("*** lastData=%02X\n", rxByte);
+				_DEBUG2 printf("**** lastData=%02X\n", rxByte);
 				status = CHECK_CRC8D;
 			}
 			break;
 
 		case CHECK_CRC8D:
-			_DEBUG printf("*** CHECK_CRC8D=%d\n", count);
+			_DEBUG2 printf("**** CHECK_CRC8D=%d\n", count);
 			status = GET_SYNC;
 			
 			if (count > BufferLength) {
@@ -447,7 +445,7 @@ STATES_GET_PACKET;
 			}
 			crc = Crc8Check(dataBuffer, count);
 			if (crc == rxByte) {
-				_DEBUG printf("*** return OK(%02X) xlen=%d\n", crc, count);
+				_DEBUG2 printf("**** return OK(%02X) xlen=%d\n", crc, count);
 				return OK; // Correct packet received
 			}
 			else if (rxByte == SYNC_CODE) {

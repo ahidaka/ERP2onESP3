@@ -348,13 +348,15 @@ VOID ReloadPublickey(char *PublickeyPath)
 static VOID WriteLine(FILE *f, PUBLICKEY *pt)
 {
 	int i;
-	const int length = 8 + 1 + 8 + 1 + 32 + 4;  
-	CHAR buffer[256];
+	enum { bufferSize = 64 };
+	//int MaxLengthEstimate = 8 + 1 + 8 + 1 + 32 + 4;
+	CHAR buffer[bufferSize];
+	CHAR keyBuffer[bufferSize];
 	CHAR *p = &buffer[0];
 	
 	DEBUG_LOG("Enter");
 #ifdef SECURE_DEBUG
-	printf("ID:%08X RLC(%d)=%02X %02X %02X %02X KEY=%02X %02X %02X %02X\n",
+	printf("++WriteLine:ID:%08X RLC(%d)=%02X %02X %02X %02X KEY=%02X %02X %02X %02X\n",
 	       pt->Id, pt->RlcLength, pt->Rlc[0], pt->Rlc[1], pt->Rlc[2], pt->Rlc[3],
 	       pt->Key[0], pt->Key[1], pt->Key[2], pt->Key[3]);
 #endif
@@ -370,17 +372,17 @@ static VOID WriteLine(FILE *f, PUBLICKEY *pt)
 	strcat(&buffer[9], ",");
 
 	//Write KEY
-	p = &buffer[18];
-	for(i = 0; i < 16; i++) {
+	p = &keyBuffer[0];
+	for(i = 0; i < 8; i++) {
 		sprintf(p, "%02X%02X", pt->Key[i*2], pt->Key[i*2+1]);
 		p += 4;
 	}
-	p = &buffer[50];
-	*p++ = '\r';
-	*p++ = '\n';
-	*p++ = '\0';
-	*p   = '\0';
-	fwrite(buffer, length, 1, f);
+	strcat(keyBuffer, "\r\n");
+	strcat(&buffer[10], keyBuffer);
+	fwrite(buffer, strlen(buffer), 1, f);
+#ifdef SECURE_DEBUG
+	printf("++WriteLine:%s",buffer); 
+#endif
 }
 
 VOID RewritePublickey(EO_CONTROL *p)
@@ -389,8 +391,9 @@ VOID RewritePublickey(EO_CONTROL *p)
 	FILE *f;
 	INT i;
 
-	printf("++%s,%s,%s\n", p->BridgeDirectory, p->PublickeyFile, p->PublickeyPath);
-
+#ifdef SECURE_DEBUG
+	printf("++%s:open=%s\n", __FUNCTION__, p->PublickeyPath);
+#endif
 	if (p->PublickeyPath == NULL) {
 		p->PublickeyPath = MakePath(p->BridgeDirectory, p->PublickeyFile); 
 	}
@@ -408,8 +411,9 @@ VOID RewritePublickey(EO_CONTROL *p)
 		}
 		pt++;
 	}
-	printf("++%s,%s,%s\n", p->BridgeDirectory, p->PublickeyFile, p->PublickeyPath);
-
+#ifdef SECURE_DEBUG
+	printf("++%s:close=%s\n", __FUNCTION__, p->PublickeyPath);
+#endif
 }
 
 PUBLICKEY *AddPublickey(EO_CONTROL *p, UINT Id, SECURE_REGISTER *ps)
